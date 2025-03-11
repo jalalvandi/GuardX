@@ -3,7 +3,7 @@ name: Build Rust Project
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
       - main
