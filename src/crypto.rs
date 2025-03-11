@@ -11,8 +11,7 @@ pub fn encrypt_file(path: &Path, key: &str) -> Result<()> {
     rand.fill(&mut nonce_bytes)
         .map_err(|e| anyhow::anyhow!("RNG error: {:?}", e))?;
 
-    // کلید رو به 32 بایت تبدیل می‌کنیم
-    let mut key_bytes = vec![0u8; 32]; // 32 بایت برای AES-256
+    let mut key_bytes = vec![0u8; 32];
     let input_bytes = key.as_bytes();
     key_bytes[..input_bytes.len().min(32)].copy_from_slice(&input_bytes[..input_bytes.len().min(32)]);
 
@@ -37,7 +36,6 @@ pub fn decrypt_file(path: &Path, key: &str) -> Result<()> {
     let encrypted_data = read(path)?;
     let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
 
-    // کلید رو به 32 بایت تبدیل می‌کنیم
     let mut key_bytes = vec![0u8; 32];
     let input_bytes = key.as_bytes();
     key_bytes[..input_bytes.len().min(32)].copy_from_slice(&input_bytes[..input_bytes.len().min(32)]);

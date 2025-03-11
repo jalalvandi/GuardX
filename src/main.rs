@@ -1,24 +1,39 @@
-mod ui;
-mod crypto;
-mod filesystem;
-
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    ExecutableCommand,
 };
 use ratatui::prelude::*;
 use std::io;
 
+mod ui;
+mod filesystem;
+mod crypto;
+
+use ui::{App, run_app};
+
 fn main() -> Result<()> {
     enable_raw_mode()?;
-    io::stdout().execute(EnterAlternateScreen)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    let app = ui::App::new()?;
-    ui::run_app(&mut terminal, app)?;
+    let app = App::new()?;
+    let res = run_app(&mut terminal, app);
 
     disable_raw_mode()?;
-    io::stdout().execute(LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = res {
+        println!("{:?}", err);
+    }
+
     Ok(())
 }

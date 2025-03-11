@@ -16,16 +16,18 @@ pub struct App {
     status: String,
     should_quit: bool,
     last_processed: Instant,
-    success_timer: Option<Instant>, // برای افکت پیام موفقیت
-    progress: f64, // برای نوار پیشرفت
-    in_progress: bool, // وضعیت رمزگذاری/رمزگشایی
+    success_timer: Option<Instant>,
+    progress: f64,
+    in_progress: bool,
+    preview_content: Option<String>,
 }
 
 #[derive(PartialEq)]
-enum Mode {
+pub enum Mode {
     Navigate,
     EnterKey,
     CreateFolder,
+    Preview,
 }
 
 impl App {
@@ -38,12 +40,13 @@ impl App {
             selected_dir,
             key_input: String::new(),
             mode: Mode::Navigate,
-            status: "Welcome! Press 'k' to enter key, 'n' to create folder".to_string(),
+            status: "Welcome! Press 'k' to enter key, 'n' to create folder, 'p' to preview".to_string(),
             should_quit: false,
             last_processed: Instant::now(),
             success_timer: None,
             progress: 0.0,
             in_progress: false,
+            preview_content: None,
         })
     }
 }
@@ -54,14 +57,12 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        // به‌روزرسانی تایمر موفقیت برای افکت
         if let Some(start) = app.success_timer {
             if start.elapsed() > Duration::from_secs(2) {
-                app.success_timer = None; // پیام موفقیت بعد از 2 ثانیه محو می‌شه
+                app.success_timer = None;
             }
         }
 
-        // شبیه‌سازی پیشرفت (برای تست)
         if app.in_progress {
             app.progress += 0.1;
             if app.progress >= 1.0 {
@@ -133,6 +134,20 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                     app.key_input.clear();
                                     app.status = "[Folder] Enter new folder name: ".to_string();
                                 }
+                                KeyCode::Char('p') => {
+                                    if let Some(selected) = app.selected_dir.selected() {
+                                        let files = app.fs.get_files(selected);
+                                        if let Some(first_file) = files.first() {
+                                            let path = app.fs.dirs[selected].join(first_file);
+                                            app.preview_content = std::fs::read_to_string(&path)
+                                                .ok()
+                                                .or(Some("Unable to read file".to_string()));
+                                            app.mode = Mode::Preview;
+                                        } else {
+                                            app.status = "[!] No files to preview".to_string();
+                                        }
+                                    }
+                                }
                                 _ => {}
                             },
                             Mode::EnterKey => match key.code {
@@ -176,6 +191,14 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
+                            Mode::Preview => match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.mode = Mode::Navigate;
+                                    app.preview_content = None;
+                                    app.status = "Back to navigation".to_string();
+                                }
+                                _ => {}
+                            },
                         }
                     }
                 }
@@ -192,14 +215,13 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // تب‌ها
-            Constraint::Min(0),     // بدنه اصلی
-            Constraint::Length(5),  // وضعیت + نوار پیشرفت
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(5),
         ])
         .split(f.size());
 
-    // تب‌ها با تم تیره
-    let titles = vec!["[Folders]", "[Key]", "[New Folder]"];
+    let titles = vec!["[Folders]", "[Key]", "[New Folder]", "[Preview]"];
     let tabs = Tabs::new(titles)
         .block(Block::default()
             .borders(Borders::ALL)
@@ -211,12 +233,12 @@ fn ui(f: &mut Frame, app: &mut App) {
             Mode::Navigate => 0,
             Mode::EnterKey => 1,
             Mode::CreateFolder => 2,
+            Mode::Preview => 3,
         })
         .style(Style::default().fg(Color::White))
         .highlight_style(Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD));
     f.render_widget(tabs, chunks[0]);
 
-    // بدنه اصلی
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -239,23 +261,35 @@ fn ui(f: &mut Frame, app: &mut App) {
         .highlight_symbol("> ");
     f.render_stateful_widget(dirs_list, main_chunks[0], &mut app.selected_dir);
 
-    let files = if let Some(selected) = app.selected_dir.selected() {
-        app.fs.get_files(selected)
+    if app.mode == Mode::Preview {
+        let preview_text = app.preview_content.as_ref().unwrap_or(&"No content".to_string()).clone();
+        let preview_widget = Paragraph::new(preview_text)
+            .style(Style::default().fg(Color::White))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title("File Preview (Esc to exit)")
+                .title_style(Style::default().fg(Color::LightCyan))
+                .border_style(Style::default().fg(Color::Gray)));
+        f.render_widget(preview_widget, main_chunks[1]);
     } else {
-        vec![]
-    };
-    let rows: Vec<Row> = files.iter().map(|f| Row::new(vec![Cell::from(f.as_str())])).collect();
-    let files_table = Table::new(rows, &[Constraint::Percentage(100)])
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title("Files")
-            .title_style(Style::default().fg(Color::LightCyan))
-            .border_style(Style::default().fg(Color::Gray)))
-        .style(Style::default().fg(Color::White));
-    f.render_widget(files_table, main_chunks[1]);
+        let files = if let Some(selected) = app.selected_dir.selected() {
+            app.fs.get_files(selected)
+        } else {
+            vec![]
+        };
+        let rows: Vec<Row> = files.iter().map(|f| Row::new(vec![Cell::from(f.as_str())])).collect();
+        let files_table = Table::new(rows, &[Constraint::Percentage(100)])
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title("Files")
+                .title_style(Style::default().fg(Color::LightCyan))
+                .border_style(Style::default().fg(Color::Gray)))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(files_table, main_chunks[1]);
+    }
 
-    // بخش وضعیت و نوار پیشرفت
     let status_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Length(2)])
@@ -278,7 +312,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::Gray))
-            .title("Status/Input | q: Quit | Up/Down: Navigate | k: Key | n: New Folder | e: Encrypt | d: Decrypt")
+            .title("Status/Input | q: Quit | Up/Down: Navigate | k: Key | n: New Folder | e: Encrypt | d: Decrypt | p: Preview")
             .title_style(Style::default().fg(Color::LightCyan)));
     f.render_widget(input_widget, status_chunks[0]);
 
@@ -293,7 +327,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .gauge_style(Style::default().fg(Color::LightBlue))
             .percent((app.progress * 100.0) as u16)
     } else {
-        Gauge::default() // ویجت خالی برای پر کردن فضا
+        Gauge::default()
             .block(Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
