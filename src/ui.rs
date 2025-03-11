@@ -13,6 +13,8 @@ use std::fs;
 pub struct App {
     fs: FileSystem,
     selected_dir: ListState,
+    selected_file: ListState,
+    current_files: Vec<String>,
     key_input: String,
     mode: Mode,
     status: String,
@@ -22,7 +24,6 @@ pub struct App {
     progress: f64,
     in_progress: bool,
     preview_content: Option<String>,
-    search_query: String,
     history: Vec<(String, Instant, bool)>,
     settings: Settings,
     animation_step: usize,
@@ -31,11 +32,11 @@ pub struct App {
 
 #[derive(PartialEq)]
 pub enum Mode {
-    Navigate,
+    NavigateFolders,
+    NavigateFiles,
     EnterKey,
     CreateFolder,
     Preview,
-    Search,
     Settings,
     ConfirmDelete,
 }
@@ -56,19 +57,23 @@ impl App {
         let fs = FileSystem::new()?;
         let mut selected_dir = ListState::default();
         selected_dir.select(Some(0));
+        let mut selected_file = ListState::default();
+        selected_file.select(None);
+        let current_files = if !fs.dirs.is_empty() { fs.get_files(0) } else { vec![] };
         Ok(App {
             fs,
             selected_dir,
+            selected_file,
+            current_files,
             key_input: String::new(),
-            mode: Mode::Navigate,
-            status: "Welcome! Use 'k' for key, 'n' for folder, 'p' for preview, 's' for search, 't' for settings".to_string(),
+            mode: Mode::NavigateFolders,
+            status: "Welcome!".to_string(),
             should_quit: false,
             last_processed: Instant::now(),
             success_timer: None,
             progress: 0.0,
             in_progress: false,
             preview_content: None,
-            search_query: String::new(),
             history: Vec::new(),
             settings: Settings { theme: Theme::Dark, key_length: 32 },
             animation_step: 0,
@@ -79,7 +84,17 @@ impl App {
     fn get_theme_styles(&self) -> (Color, Color, Color, Color) {
         match self.settings.theme {
             Theme::Dark => (Color::Black, Color::White, Color::LightCyan, Color::Gray),
-            Theme::Light => (Color::White, Color::Black, Color::Cyan, Color::LightGreen),
+            Theme::Light => (Color::White, Color::Black, Color::Cyan, Color::Gray),
+        }
+    }
+
+    fn update_current_files(&mut self) {
+        if let Some(selected) = self.selected_dir.selected() {
+            self.current_files = self.fs.get_files(selected);
+            self.selected_file.select(if self.current_files.is_empty() { None } else { Some(0) });
+        } else {
+            self.current_files.clear();
+            self.selected_file.select(None);
         }
     }
 }
@@ -114,13 +129,25 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                     if now.duration_since(app.last_processed) >= DEBOUNCE_DURATION {
                         app.last_processed = now;
                         match app.mode {
-                            Mode::Navigate => match key.code {
+                            Mode::NavigateFolders => match key.code {
                                 KeyCode::Char('q') => app.should_quit = true,
-                                KeyCode::Up => app.selected_dir.select(Some(app.selected_dir.selected().unwrap_or(0).saturating_sub(1))),
+                                KeyCode::Up => {
+                                    if let Some(selected) = app.selected_dir.selected() {
+                                        app.selected_dir.select(Some(selected.saturating_sub(1)));
+                                        app.update_current_files();
+                                    }
+                                }
                                 KeyCode::Down => {
                                     let len = app.fs.dirs.len();
                                     if len > 0 {
                                         app.selected_dir.select(Some((app.selected_dir.selected().unwrap_or(0) + 1).min(len - 1)));
+                                        app.update_current_files();
+                                    }
+                                }
+                                KeyCode::Right => { // تغییر به Right برای ورود به فایل‌ها
+                                    if !app.current_files.is_empty() {
+                                        app.mode = Mode::NavigateFiles;
+                                        app.status = "Navigating files (Left to return)".to_string();
                                     }
                                 }
                                 KeyCode::Char('e') => {
@@ -183,11 +210,6 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                         }
                                     }
                                 }
-                                KeyCode::Char('s') => {
-                                    app.mode = Mode::Search;
-                                    app.search_query.clear();
-                                    app.status = "[Search] Enter query: ".to_string();
-                                }
                                 KeyCode::Char('t') => app.mode = Mode::Settings,
                                 KeyCode::Char('r') => app.mode = Mode::ConfirmDelete,
                                 KeyCode::Char('i') => app.info_mode = !app.info_mode,
@@ -213,9 +235,38 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 }
                                 _ => {}
                             },
+                            Mode::NavigateFiles => match key.code {
+                                KeyCode::Up => {
+                                    if let Some(selected) = app.selected_file.selected() {
+                                        app.selected_file.select(Some(selected.saturating_sub(1)));
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    let len = app.current_files.len();
+                                    if len > 0 {
+                                        app.selected_file.select(Some((app.selected_file.selected().unwrap_or(0) + 1).min(len - 1)));
+                                    }
+                                }
+                                KeyCode::Left => { // تغییر به Left برای بازگشت به پوشه‌ها
+                                    app.mode = Mode::NavigateFolders;
+                                    app.status = "Back to folders".to_string();
+                                    app.selected_file.select(None);
+                                }
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char('p') => {
+                                    if let Some(dir_idx) = app.selected_dir.selected() {
+                                        if let Some(file_idx) = app.selected_file.selected() {
+                                            let path = app.fs.dirs[dir_idx].join(&app.current_files[file_idx]);
+                                            app.preview_content = fs::read_to_string(&path).ok().or(Some("Unable to read file".to_string()));
+                                            app.mode = Mode::Preview;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            },
                             Mode::EnterKey => match key.code {
                                 KeyCode::Enter => {
-                                    app.mode = Mode::Navigate;
+                                    app.mode = Mode::NavigateFolders;
                                     app.status = format!("[OK] Key '{}' set successfully!", app.key_input);
                                     app.success_timer = Some(Instant::now());
                                     app.history.push(("Set key".to_string(), Instant::now(), true));
@@ -228,7 +279,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                     app.key_input.pop();
                                     app.status = format!("[Key] Enter your encryption key: {}", app.key_input);
                                 }
-                                KeyCode::Esc => app.mode = Mode::Navigate,
+                                KeyCode::Esc => app.mode = Mode::NavigateFolders,
                                 KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
@@ -241,9 +292,10 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                         app.status = format!("[OK] Folder '{}' created!", app.key_input);
                                         app.history.push(("Created folder".to_string(), Instant::now(), true));
                                         app.success_timer = Some(Instant::now());
+                                        app.update_current_files();
                                     }
                                     app.key_input.clear();
-                                    app.mode = Mode::Navigate;
+                                    app.mode = Mode::NavigateFolders;
                                 }
                                 KeyCode::Char(c) => {
                                     app.key_input.push(c);
@@ -253,30 +305,16 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                     app.key_input.pop();
                                     app.status = format!("[Folder] Enter new folder name: {}", app.key_input);
                                 }
-                                KeyCode::Esc => app.mode = Mode::Navigate,
+                                KeyCode::Esc => app.mode = Mode::NavigateFolders,
                                 KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
                             Mode::Preview => match key.code {
                                 KeyCode::Esc | KeyCode::Char('q') => {
-                                    app.mode = Mode::Navigate;
+                                    app.mode = if app.selected_file.selected().is_some() { Mode::NavigateFiles } else { Mode::NavigateFolders };
                                     app.preview_content = None;
                                     app.status = "Back to navigation".to_string();
                                 }
-                                _ => {}
-                            },
-                            Mode::Search => match key.code {
-                                KeyCode::Enter => app.mode = Mode::Navigate,
-                                KeyCode::Char(c) => {
-                                    app.search_query.push(c);
-                                    app.status = format!("[Search] Enter query: {}", app.search_query);
-                                }
-                                KeyCode::Backspace => {
-                                    app.search_query.pop();
-                                    app.status = format!("[Search] Enter query: {}", app.search_query);
-                                }
-                                KeyCode::Esc => app.mode = Mode::Navigate,
-                                KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
                             Mode::Settings => match key.code {
@@ -284,7 +322,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 KeyCode::Char('2') => app.settings.theme = Theme::Light,
                                 KeyCode::Char('3') => app.settings.key_length = 16,
                                 KeyCode::Char('4') => app.settings.key_length = 32,
-                                KeyCode::Esc => app.mode = Mode::Navigate,
+                                KeyCode::Esc => app.mode = Mode::NavigateFolders,
                                 KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
@@ -305,11 +343,12 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                             } else {
                                                 app.selected_dir.select(Some(selected.min(app.fs.dirs.len() - 1)));
                                             }
+                                            app.update_current_files();
                                         }
                                     }
-                                    app.mode = Mode::Navigate;
+                                    app.mode = Mode::NavigateFolders;
                                 }
-                                KeyCode::Char('n') | KeyCode::Esc => app.mode = Mode::Navigate,
+                                KeyCode::Char('n') | KeyCode::Esc => app.mode = Mode::NavigateFolders,
                                 _ => {}
                             },
                         }
@@ -320,15 +359,21 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                         let y = mouse.row;
                         if y < 3 { // تب‌ها
                             let x = mouse.column;
-                            if x < 10 { app.mode = Mode::Navigate; }
+                            if x < 10 { app.mode = Mode::NavigateFolders; }
                             else if x < 20 { app.mode = Mode::EnterKey; app.key_input.clear(); app.status = "[Key] Enter your encryption key: ".to_string(); }
                             else if x < 35 { app.mode = Mode::CreateFolder; app.key_input.clear(); app.status = "[Folder] Enter new folder name: ".to_string(); }
                             else { app.mode = Mode::Preview; }
-                        } else if y >= 4 && y < main_area_height(&app) + 4 { // لیست پوشه‌ها
-                            if let Some(selected) = app.selected_dir.selected() {
+                        } else if y >= 4 && y < main_area_height(&app) + 4 { // لیست پوشه‌ها یا فایل‌ها
+                            if app.mode == Mode::NavigateFolders {
                                 let new_idx = (y - 4) as usize;
                                 if new_idx < app.fs.dirs.len() {
                                     app.selected_dir.select(Some(new_idx));
+                                    app.update_current_files();
+                                }
+                            } else if app.mode == Mode::NavigateFiles {
+                                let new_idx = (y - 4) as usize;
+                                if new_idx < app.current_files.len() {
+                                    app.selected_file.select(Some(new_idx));
                                 }
                             }
                         }
@@ -345,7 +390,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
 }
 
 fn main_area_height(app: &App) -> u16 {
-    app.fs.dirs.len() as u16
+    app.fs.dirs.len().max(app.current_files.len()) as u16
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -368,7 +413,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
             .border_style(Style::default().fg(border)))
         .select(match app.mode {
-            Mode::Navigate => 0,
+            Mode::NavigateFolders => 0,
             Mode::EnterKey => 1,
             Mode::CreateFolder => 2,
             Mode::Preview => 3,
@@ -384,7 +429,6 @@ fn ui(f: &mut Frame, app: &mut App) {
         .split(chunks[1]);
 
     let dirs: Vec<ListItem> = app.fs.dirs.iter().enumerate()
-        .filter(|(_, d)| app.search_query.is_empty() || d.display().to_string().to_lowercase().contains(&app.search_query.to_lowercase()))
         .map(|(i, d)| {
             let mark = if app.fs.is_encrypted(i) { "[E]" } else { "" };
             ListItem::new(format!("{} {}", mark, d.display())).style(Style::default().fg(Color::LightGreen))
@@ -396,7 +440,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .border_type(BorderType::Rounded)
             .title("Folders")
             .title_style(Style::default().fg(accent))
-            .border_style(Style::default().fg(border)))
+            .border_style(Style::default().fg(if app.mode == Mode::NavigateFolders { accent } else { border })))
         .highlight_style(Style::default().fg(Color::LightYellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .highlight_symbol("> ");
     f.render_stateful_widget(dirs_list, main_chunks[0], &mut app.selected_dir);
@@ -412,7 +456,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .title_style(Style::default().fg(accent))
                 .border_style(Style::default().fg(border)));
         f.render_widget(preview_widget, main_chunks[1]);
-    } else if app.info_mode {
+    } else if app.info_mode && app.mode != Mode::NavigateFiles {
         let total_dirs = app.fs.dirs.len();
         let encrypted_dirs = app.fs.dirs.iter().enumerate().filter(|(i, _)| app.fs.is_encrypted(*i)).count();
         let total_files: usize = app.fs.dirs.iter().map(|d| fs::read_dir(d).map(|dir| dir.count()).unwrap_or(0)).sum();
@@ -430,20 +474,21 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .border_style(Style::default().fg(border)));
         f.render_widget(info_widget, main_chunks[1]);
     } else {
-        let files = if let Some(selected) = app.selected_dir.selected() {
-            app.fs.get_files(selected)
-        } else {
-            vec![]
-        };
-        let rows: Vec<Row> = files.iter().map(|f| Row::new(vec![Cell::from(f.as_str())])).collect();
+        let rows: Vec<Row> = app.current_files.iter().enumerate().map(|(i, f)| {
+            let style = if Some(i) == app.selected_file.selected() && app.mode == Mode::NavigateFiles {
+                Style::default().fg(Color::LightYellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(fg)
+            };
+            Row::new(vec![Cell::from(f.as_str())]).style(style)
+        }).collect();
         let files_table = Table::new(rows, &[Constraint::Percentage(100)])
             .block(Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title("Files")
                 .title_style(Style::default().fg(accent))
-                .border_style(Style::default().fg(border)))
-            .style(Style::default().fg(fg));
+                .border_style(Style::default().fg(if app.mode == Mode::NavigateFiles { accent } else { border })));
         f.render_widget(files_table, main_chunks[1]);
     }
 
@@ -469,7 +514,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border))
-            .title("Status/Input | q: Quit | k: Key | n: New | e: Encrypt | d: Decrypt | p: Preview | s: Search | t: Settings | r: Remove | i: Info | l: Load | v: Save")
+            .title("Status/Input\nq: Quit | k: Key | n: New | e: Encrypt | d: Decrypt\np: Preview | t: Settings | r: Remove | i: Info\nl: Load | v: Save | Right/Left: Switch")
             .title_style(Style::default().fg(accent)));
     f.render_widget(input_widget, status_chunks[0]);
 
