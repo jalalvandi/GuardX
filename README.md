@@ -43,19 +43,19 @@ To run SecureFolder, you’ll need:
 - Launch the app, and you’ll see a terminal-based interface. Use these controls to navigate and manage your files:
 
 Controls
-q: Quit the app
-↑/↓: Move between folders or files
-→/←: Switch between folder and file lists
-k: Enter an encryption key
-e: Encrypt the selected folder
-d: Decrypt the selected folder
-n: Create a new folder
-p: Preview file contents
-r: Remove a folder or file (with confirmation)
-t: Open settings
-i: Toggle dashboard and history
-l: Load a saved key
-v: Save the current key
+q: Quit the app  
+↑/↓: Move between folders or files  
+→/←: Switch between folder and file lists  
+k: Enter an encryption key  
+e: Encrypt the selected folder  
+d: Decrypt the selected folder  
+n: Create a new folder  
+p: Preview file contents  
+r: Remove a folder or file (with confirmation)  
+t: Open settings  
+i: Toggle dashboard and history  
+l: Load a saved key  
+v: Save the current key  
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details (add one if it’s missing!).
