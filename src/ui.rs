@@ -110,15 +110,14 @@ impl App {
                                         files.push((entry.file_name().to_string_lossy().to_string(), metadata, encrypted));
                                     }
                                 }
-                                Err(_) => {} // خطا رو نادیده می‌گیریم و توی UI مدیریت می‌کنیم
+                                Err(_) => {} 
                             }
                         }
-                        Err(_) => {} // خطا رو نادیده می‌گیریم
-                    }
+                        Err(_) => {} 
                 }
                 Ok(files)
             }
-            Err(_) => Ok(vec![]) // به جای ارور، لیست خالی برمی‌گردونیم
+            Err(_) => Ok(vec![]) 
         }
     }
 
@@ -474,14 +473,14 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // نوار وضعیت
-            Constraint::Length(2),   // نوار پیشرفت
-            Constraint::Min(10),     // بخش اصلی
-            Constraint::Length(5),   // راهنما
+            Constraint::Length(3),   // StatusBar
+            Constraint::Length(2),   // ProgressBar
+            Constraint::Min(10),     // Main Section
+            Constraint::Length(5),   // Help
         ])
         .split(f.size());
 
-    // نوار وضعیت
+    // StatusBar
     let status_style = if app.status.starts_with("[OK]") {
         let anim_colors = [Color::Green, Color::LightGreen, Color::Green, Color::LightGreen];
         Style::default().fg(anim_colors[app.animation_step]).add_modifier(Modifier::BOLD)
@@ -503,7 +502,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .block(status_block);
     f.render_widget(status_widget, chunks[0]);
 
-    // نوار پیشرفت
+    // ProgressBar
     if app.in_progress {
         let progress_widget = Gauge::default()
             .gauge_style(Style::default().fg(Color::Cyan).bg(bg))
@@ -512,13 +511,13 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(progress_widget, chunks[1]);
     }
 
-    // بخش اصلی
+    // Main Section
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(chunks[2]);
 
-    // لیست پوشه‌ها
+    // Folder List
     let dirs: Vec<ListItem> = app.fs.dirs.iter().enumerate()
         .map(|(i, d)| {
             let mark = if app.fs.is_encrypted(i) { "🔐 " } else { "📁 " };
@@ -538,7 +537,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .highlight_symbol("➤ ");
     f.render_stateful_widget(dirs_list, main_chunks[0], &mut app.selected_dir);
 
-    // بخش سمت راست
+    // Right Section
     if app.mode == Mode::Preview {
         let preview_text = app.preview_content.as_ref().unwrap_or(&"No content".to_string()).clone();
         let preview_widget = Paragraph::new(preview_text)
@@ -613,7 +612,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(files_table, main_chunks[1]);
     }
 
-    // نوار راهنما
+    // HelpBar
     let help_text = vec![
         Line::from(vec![
             Span::styled("q", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
@@ -651,7 +650,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .border_style(Style::default().fg(border)));
     f.render_widget(help_widget, chunks[3]);
 
-    // پنجره تنظیمات
+    // Setting window
     if app.mode == Mode::Settings {
         let settings_area = centered_rect(50, 50, f.size());
         f.render_widget(Clear, settings_area);
@@ -696,7 +695,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(settings_widget, settings_area);
     }
 
-    // پنجره تأیید حذف پوشه
+    // Confirm Folder Deletion
     if app.mode == Mode::ConfirmDeleteFolder {
         let confirm_area = centered_rect(30, 5, f.size());
         f.render_widget(Clear, confirm_area);
@@ -713,7 +712,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(confirm_widget, confirm_area);
     }
 
-    // پنجره تأیید حذف فایل
+    // Confirm File Deletion
     if app.mode == Mode::ConfirmDeleteFile {
         let confirm_area = centered_rect(30, 5, f.size());
         f.render_widget(Clear, confirm_area);
@@ -730,7 +729,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(confirm_widget, confirm_area);
     }
 
-    // تاریخچه
+    // History
     if app.info_mode {
         let history_area = Rect {
             x: f.size().width - 35,
