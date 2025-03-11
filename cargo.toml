@@ -5,8 +5,7 @@ edition = "2021"
 
 [dependencies]
 ratatui = "0.26.1"
-crossterm = "0.27"
-ring = "0.17"
-argon2 = "0.5"      # برای هش کردن کلید
-anyhow = "1.0"
-dirs = "5.0"
+crossterm = "0.27.0"
+anyhow = "1.0.81"
+dirs = "5.0.1"
+ring = "0.17.8"

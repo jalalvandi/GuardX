@@ -5,6 +5,7 @@ use dirs::home_dir;
 
 pub struct FileSystem {
     pub dirs: Vec<PathBuf>,
+    encrypted: Vec<bool>,
 }
 
 impl FileSystem {
@@ -13,8 +14,9 @@ impl FileSystem {
         let dirs = std::fs::read_dir(&home)?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_dir())
-            .collect();
-        Ok(FileSystem { dirs })
+            .collect::<Vec<_>>();
+        let encrypted = vec![false; dirs.len()];
+        Ok(FileSystem { dirs, encrypted })
     }
 
     pub fn get_files(&self, index: usize) -> Vec<String> {
@@ -63,6 +65,17 @@ impl FileSystem {
         let new_path = home.join(name);
         std::fs::create_dir(&new_path)?;
         self.dirs.push(new_path);
+        self.encrypted.push(false);
         Ok(())
+    }
+
+    pub fn mark_encrypted(&mut self, index: usize, encrypted: bool) {
+        if index < self.encrypted.len() {
+            self.encrypted[index] = encrypted;
+        }
+    }
+
+    pub fn is_encrypted(&self, index: usize) -> bool {
+        index < self.encrypted.len() && self.encrypted[index]
     }
 }
