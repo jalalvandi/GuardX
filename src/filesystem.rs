@@ -19,17 +19,15 @@ impl FileSystem {
         Ok(FileSystem { dirs, encrypted })
     }
 
-    pub fn get_files(&self, index: usize) -> Vec<String> {
+    pub fn get_files(&self, index: usize) -> Result<Vec<String>, anyhow::Error> {
         if index >= self.dirs.len() {
-            return vec!["Error: Invalid directory index".to_string()];
+            return Err(anyhow::anyhow!("Invalid directory index"));
         }
         let dir = &self.dirs[index];
-        match std::fs::read_dir(dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
-                .collect(),
-            Err(_) => vec![format!("Error reading directory: {:?}", dir)],
-        }
+        Ok(std::fs::read_dir(dir)
+            .with_context(|| format!("Failed to read directory: {:?}", dir))?
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .collect())
     }
 
     pub fn encrypt_dir(&self, index: usize, key: &str) -> Result<()> {

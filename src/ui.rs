@@ -4,7 +4,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, ListState, BorderType, Table, Row, Cell, Clear},
+    widgets::{Block, Borders, List, ListItem, Paragraph, ListState, BorderType, Table, Row, Cell, Clear},
     style::{Style, Color, Modifier},
 };
 use std::time::{Duration, Instant};
@@ -42,7 +42,8 @@ pub enum Mode {
     CreateFolder,
     Preview,
     Settings,
-    ConfirmDelete,
+    ConfirmDeleteFolder,
+    ConfirmDeleteFile,
 }
 
 pub struct Settings {
@@ -250,18 +251,24 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 }
                                 KeyCode::Char('p') => {
                                     if let Some(selected) = app.selected_dir.selected() {
-                                        let files = app.fs.get_files(selected);
-                                        if let Some(first_file) = files.first() {
-                                            let path = app.fs.dirs[selected].join(first_file);
-                                            app.preview_content = fs::read_to_string(&path).ok().or(Some("Unable to read file".to_string()));
-                                            app.mode = Mode::Preview;
-                                        } else {
-                                            app.status = "[!] No files to preview".to_string();
+                                        match app.fs.get_files(selected) {
+                                            Ok(files) => {
+                                                if let Some(first_file) = files.first() {
+                                                    let path = app.fs.dirs[selected].join(first_file);
+                                                    app.preview_content = fs::read_to_string(&path).ok().or(Some("Unable to read file".to_string()));
+                                                    app.mode = Mode::Preview;
+                                                } else {
+                                                    app.status = "[!] No files to preview".to_string();
+                                                }
+                                            }
+                                            Err(e) => {
+                                                app.status = format!("[X] Failed to load files: {}", e);
+                                            }
                                         }
                                     }
                                 }
                                 KeyCode::Char('t') => app.mode = Mode::Settings,
-                                KeyCode::Char('r') => app.mode = Mode::ConfirmDelete,
+                                KeyCode::Char('r') => app.mode = Mode::ConfirmDeleteFolder,
                                 KeyCode::Char('i') => app.info_mode = !app.info_mode,
                                 KeyCode::Char('l') => {
                                     if let Ok(key) = fs::read_to_string("saved_key.enc") {
@@ -312,6 +319,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                         }
                                     }
                                 }
+                                KeyCode::Char('r') => app.mode = Mode::ConfirmDeleteFile,
                                 _ => {}
                             },
                             Mode::EnterKey => match key.code {
@@ -376,7 +384,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 KeyCode::Char('q') => app.should_quit = true,
                                 _ => {}
                             },
-                            Mode::ConfirmDelete => match key.code {
+                            Mode::ConfirmDeleteFolder => match key.code {
                                 KeyCode::Char('y') => {
                                     if let Some(selected) = app.selected_dir.selected() {
                                         let path = app.fs.dirs[selected].clone();
@@ -401,19 +409,34 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 KeyCode::Char('n') | KeyCode::Esc => app.mode = Mode::NavigateFolders,
                                 _ => {}
                             },
+                            Mode::ConfirmDeleteFile => match key.code {
+                                KeyCode::Char('y') => {
+                                    if let Some(dir_idx) = app.selected_dir.selected() {
+                                        if let Some(file_idx) = app.selected_file.selected() {
+                                            let path = app.fs.dirs[dir_idx].join(&app.current_files[file_idx].0);
+                                            if let Err(e) = fs::remove_file(&path) {
+                                                app.status = format!("[X] File delete failed: {}", e);
+                                                app.history.push((format!("File delete failed: {}", e), Instant::now(), false));
+                                            } else {
+                                                app.status = "[OK] File deleted successfully!".to_string();
+                                                app.history.push(("Deleted file".to_string(), Instant::now(), true));
+                                                app.success_timer = Some(Instant::now());
+                                                app.update_current_files();
+                                            }
+                                        }
+                                    }
+                                    app.mode = Mode::NavigateFiles;
+                                }
+                                KeyCode::Char('n') | KeyCode::Esc => app.mode = Mode::NavigateFiles,
+                                _ => {}
+                            },
                         }
                     }
                 }
                 Event::Mouse(mouse) => {
                     if let MouseEventKind::Down(_) = mouse.kind {
                         let y = mouse.row;
-                        if y < 3 { // تب‌ها
-                            let x = mouse.column;
-                            if x < 10 { app.mode = Mode::NavigateFolders; }
-                            else if x < 20 { app.mode = Mode::EnterKey; app.key_input.clear(); app.status = "[Key] Enter your encryption key: ".to_string(); }
-                            else if x < 35 { app.mode = Mode::CreateFolder; app.key_input.clear(); app.status = "[Folder] Enter new folder name: ".to_string(); }
-                            else { app.mode = Mode::Preview; }
-                        } else if y >= 4 && y < main_area_height(&app) + 4 { // لیست پوشه‌ها یا فایل‌ها
+                        if y >= 4 && y < main_area_height(&app) + 4 { // لیست پوشه‌ها یا فایل‌ها
                             if app.mode == Mode::NavigateFolders {
                                 let new_idx = (y - 4) as usize;
                                 if new_idx < app.fs.dirs.len() {
@@ -440,42 +463,45 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
 }
 
 fn main_area_height(app: &App) -> u16 {
-    app.fs.dirs.len().max(app.current_files.len()) as u16 + 2 // فضای اضافی برای اطمینان
+    app.fs.dirs.len().max(app.current_files.len()) as u16 + 2 // فضای اضافی
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
     let (bg, fg, accent, border) = app.get_theme_styles();
 
-    // چیدمان اصلی با فضای ثابت برای Status و Help
+    // چیدمان جدید: Status بالا، بقیه پایین
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // تب‌ها
-            Constraint::Min(10),     // بخش اصلی (حداقل 10 خط)
             Constraint::Length(3),   // Status
-            Constraint::Length(6),   // Help (6 خط برای اطمینان از نمایش کامل)
+            Constraint::Min(10),     // بخش اصلی
+            Constraint::Length(6),   // Help
         ])
         .split(f.size());
 
-    let titles = vec!["[Folders]", "[Key]", "[New Folder]", "[Preview]"];
-    let tabs = Tabs::new(titles)
+    // رندر Status در بالا
+    let input_style = if app.status.starts_with("[OK]") {
+        let elapsed = app.success_timer.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
+        if elapsed < 1.0 && app.animation_step % 2 == 0 { Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD) }
+        else { Style::default().fg(Color::Green) }
+    } else if app.status.starts_with("[X]") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if app.status.starts_with("[!]") {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(fg)
+    };
+    let input_widget = Paragraph::new(app.status.clone())
+        .style(input_style)
         .block(Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Secure Folder")
-            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
-            .border_style(Style::default().fg(border)))
-        .select(match app.mode {
-            Mode::NavigateFolders => 0,
-            Mode::EnterKey => 1,
-            Mode::CreateFolder => 2,
-            Mode::Preview => 3,
-            _ => 0,
-        })
-        .style(Style::default().fg(fg).bg(bg))
-        .highlight_style(Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD));
-    f.render_widget(tabs, chunks[0]);
+            .border_style(Style::default().fg(border))
+            .title("Secure Folder - Status")
+            .title_style(Style::default().fg(accent)));
+    f.render_widget(input_widget, chunks[0]);
 
+    // بخش اصلی
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -561,30 +587,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(files_table, main_chunks[1]);
     }
 
-    // رندر Status
-    let input_style = if app.status.starts_with("[OK]") {
-        let elapsed = app.success_timer.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
-        if elapsed < 1.0 && app.animation_step % 2 == 0 { Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD) }
-        else { Style::default().fg(Color::Green) }
-    } else if app.status.starts_with("[X]") {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-    } else if app.status.starts_with("[!]") {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(fg)
-    };
-    let input_widget = Paragraph::new(app.status.clone())
-        .style(input_style)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border))
-            .title("Status")
-            .title_style(Style::default().fg(accent)));
-    f.render_widget(input_widget, chunks[2]);
-
     // رندر Help
-    let help_text = "q: Quit | k: Insert Key | n: New Folder e: Encrypt Folder | d: Decrypt Folder\n p: Preview File | t: Settings r: Remove Folder | i: Info\n l: Load | v: Save Right/Left: Switch";
+    let help_text = "q: Quit | k: Insert Key | n: New Folder\n e: Encrypt Folder | d: Decrypt Folder\n p: Preview File | t: Settings\n r: Remove Folder | i: Info\n l: Load | v: Save\n Right/Left: Switch";
     let help_widget = Paragraph::new(help_text)
         .style(Style::default().fg(fg))
         .block(Block::default()
@@ -593,7 +597,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .title("Help")
             .title_style(Style::default().fg(accent))
             .border_style(Style::default().fg(border)));
-    f.render_widget(help_widget, chunks[3]);
+    f.render_widget(help_widget, chunks[2]);
 
     if app.mode == Mode::Settings {
         let settings_area = Rect {
@@ -619,7 +623,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(settings_widget, settings_area);
     }
 
-    if app.mode == Mode::ConfirmDelete {
+    if app.mode == Mode::ConfirmDeleteFolder {
         let confirm_area = Rect {
             x: f.size().width / 3,
             y: f.size().height / 3,
@@ -628,6 +632,25 @@ fn ui(f: &mut Frame, app: &mut App) {
         };
         f.render_widget(Clear, confirm_area);
         let confirm_widget = Paragraph::new("Delete folder? (y/n)")
+            .style(Style::default().fg(fg))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title("Confirm")
+                .title_style(Style::default().fg(accent))
+                .border_style(Style::default().fg(border)));
+        f.render_widget(confirm_widget, confirm_area);
+    }
+
+    if app.mode == Mode::ConfirmDeleteFile {
+        let confirm_area = Rect {
+            x: f.size().width / 3,
+            y: f.size().height / 3,
+            width: f.size().width / 3,
+            height: 5,
+        };
+        f.render_widget(Clear, confirm_area);
+        let confirm_widget = Paragraph::new("Delete file? (y/n)")
             .style(Style::default().fg(fg))
             .block(Block::default()
                 .borders(Borders::ALL)
