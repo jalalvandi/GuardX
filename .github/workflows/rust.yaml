@@ -1,0 +1,30 @@
+name: Build Rust Project
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest  
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4  
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1  
+        with:
+          toolchain: stable  
+
+      - name: Build the project
+        run: cargo build --release  # 
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4  
+        with:
+          name: Music-CLI
+          path: target/release/*.exe  
