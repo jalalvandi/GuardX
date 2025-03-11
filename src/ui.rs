@@ -72,7 +72,7 @@ impl App {
             current_files,
             key_input: String::new(),
             mode: Mode::NavigateFolders,
-            status: "Welcome to SecureFolder!".to_string(),
+            status: "Welcome to GuardX!".to_string(),
             should_quit: false,
             last_processed: Instant::now(),
             success_timer: None,
@@ -110,14 +110,15 @@ impl App {
                                         files.push((entry.file_name().to_string_lossy().to_string(), metadata, encrypted));
                                     }
                                 }
-                                Err(_) => {} 
+                                Err(_) => {}
                             }
                         }
-                        Err(_) => {} 
+                        Err(_) => {}
+                    }
                 }
                 Ok(files)
             }
-            Err(_) => Ok(vec![]) 
+            Err(_) => Ok(vec![])
         }
     }
 
@@ -495,7 +496,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(accent))
-        .title(" 🔒 SecureFolder ")
+        .title(" 🔒 GuardX ")
         .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD));
     let status_widget = Paragraph::new(app.status.clone())
         .style(status_style)

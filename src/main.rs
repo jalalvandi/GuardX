@@ -5,6 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
+use crossterm::terminal::{SetTitle};
 use std::io;
 
 mod ui;

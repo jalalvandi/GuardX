@@ -1,6 +1,6 @@
 [package]
 name = "GuardX"
-version = "0.1.0"
+version = "0.5.1"
 edition = "2021"
 
 [dependencies]
@@ -10,3 +10,7 @@ anyhow = "1.0.81"
 dirs = "5.0.1"
 ring = "0.17.8"
 chrono = "0.4.38" 
+winres = "0.1"
+
+[build-dependencies]
+winres = "0.1"
