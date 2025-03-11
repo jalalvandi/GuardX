@@ -4,17 +4,21 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, ListState, BorderType, Table, Row, Cell, Gauge, Clear},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, ListState, BorderType, Table, Row, Cell, Clear},
     style::{Style, Color, Modifier},
 };
 use std::time::{Duration, Instant};
 use std::fs;
+use std::fs::Metadata;
+use std::time::SystemTime;
+use chrono::DateTime as ChronoDateTime;
+use chrono::Utc;
 
 pub struct App {
     fs: FileSystem,
     selected_dir: ListState,
     selected_file: ListState,
-    current_files: Vec<String>,
+    current_files: Vec<(String, Metadata, bool)>, // نام فایل، متادیتا، وضعیت رمزنگاری
     key_input: String,
     mode: Mode,
     status: String,
@@ -59,7 +63,7 @@ impl App {
         selected_dir.select(Some(0));
         let mut selected_file = ListState::default();
         selected_file.select(None);
-        let current_files = if !fs.dirs.is_empty() { fs.get_files(0) } else { vec![] };
+        let current_files = if !fs.dirs.is_empty() { Self::load_files(&fs, 0).unwrap_or_default() } else { vec![] };
         Ok(App {
             fs,
             selected_dir,
@@ -88,10 +92,51 @@ impl App {
         }
     }
 
+    fn load_files(fs: &FileSystem, dir_idx: usize) -> Result<Vec<(String, Metadata, bool)>> {
+        if dir_idx >= fs.dirs.len() {
+            return Ok(vec![]);
+        }
+        let dir = &fs.dirs[dir_idx];
+        let mut files = Vec::new();
+        match fs::read_dir(dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => {
+                            let path = entry.path();
+                            match entry.metadata() {
+                                Ok(metadata) => {
+                                    if path.is_file() {
+                                        let encrypted = path.extension().map_or(false, |ext| ext == "enc");
+                                        files.push((entry.file_name().to_string_lossy().to_string(), metadata, encrypted));
+                                    }
+                                }
+                                Err(e) => eprintln!("Permission denied or error reading metadata for {}: {}", path.display(), e),
+                            }
+                        }
+                        Err(e) => eprintln!("Error reading entry in {}: {}", dir.display(), e),
+                    }
+                }
+            }
+            Err(e) => eprintln!("Error accessing directory {}: {}", dir.display(), e),
+        }
+        Ok(files)
+    }
+
     fn update_current_files(&mut self) {
         if let Some(selected) = self.selected_dir.selected() {
-            self.current_files = self.fs.get_files(selected);
-            self.selected_file.select(if self.current_files.is_empty() { None } else { Some(0) });
+            match Self::load_files(&self.fs, selected) {
+                Ok(files) => {
+                    self.current_files = files;
+                    self.selected_file.select(if self.current_files.is_empty() { None } else { Some(0) });
+                }
+                Err(e) => {
+                    eprintln!("Failed to update files: {}", e);
+                    self.current_files.clear();
+                    self.selected_file.select(None);
+                    self.status = format!("[X] Failed to load files: {}", e);
+                }
+            }
         } else {
             self.current_files.clear();
             self.selected_file.select(None);
@@ -103,7 +148,10 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
     const DEBOUNCE_DURATION: Duration = Duration::from_millis(150);
 
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        if let Err(e) = terminal.draw(|f| ui(f, &mut app)) {
+            eprintln!("Draw error: {}", e);
+            return Err(anyhow::Error::from(e));
+        }
 
         if let Some(start) = app.success_timer {
             if start.elapsed() > Duration::from_secs(2) {
@@ -144,7 +192,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                         app.update_current_files();
                                     }
                                 }
-                                KeyCode::Right => { // تغییر به Right برای ورود به فایل‌ها
+                                KeyCode::Right => {
                                     if !app.current_files.is_empty() {
                                         app.mode = Mode::NavigateFiles;
                                         app.status = "Navigating files (Left to return)".to_string();
@@ -166,6 +214,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                             app.success_timer = Some(Instant::now());
                                             app.in_progress = false;
                                             app.fs.mark_encrypted(selected, true);
+                                            app.update_current_files();
                                         }
                                     }
                                 }
@@ -185,6 +234,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                             app.success_timer = Some(Instant::now());
                                             app.in_progress = false;
                                             app.fs.mark_encrypted(selected, false);
+                                            app.update_current_files();
                                         }
                                     }
                                 }
@@ -247,7 +297,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                         app.selected_file.select(Some((app.selected_file.selected().unwrap_or(0) + 1).min(len - 1)));
                                     }
                                 }
-                                KeyCode::Left => { // تغییر به Left برای بازگشت به پوشه‌ها
+                                KeyCode::Left => {
                                     app.mode = Mode::NavigateFolders;
                                     app.status = "Back to folders".to_string();
                                     app.selected_file.select(None);
@@ -256,7 +306,7 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
                                 KeyCode::Char('p') => {
                                     if let Some(dir_idx) = app.selected_dir.selected() {
                                         if let Some(file_idx) = app.selected_file.selected() {
-                                            let path = app.fs.dirs[dir_idx].join(&app.current_files[file_idx]);
+                                            let path = app.fs.dirs[dir_idx].join(&app.current_files[file_idx].0);
                                             app.preview_content = fs::read_to_string(&path).ok().or(Some("Unable to read file".to_string()));
                                             app.mode = Mode::Preview;
                                         }
@@ -390,17 +440,20 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
 }
 
 fn main_area_height(app: &App) -> u16 {
-    app.fs.dirs.len().max(app.current_files.len()) as u16
+    app.fs.dirs.len().max(app.current_files.len()) as u16 + 2 // فضای اضافی برای اطمینان
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
     let (bg, fg, accent, border) = app.get_theme_styles();
+
+    // چیدمان اصلی با فضای ثابت برای Status و Help
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(5),
+            Constraint::Length(3),   // تب‌ها
+            Constraint::Min(10),     // بخش اصلی (حداقل 10 خط)
+            Constraint::Length(3),   // Status
+            Constraint::Length(6),   // Help (6 خط برای اطمینان از نمایش کامل)
         ])
         .split(f.size());
 
@@ -474,29 +527,41 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .border_style(Style::default().fg(border)));
         f.render_widget(info_widget, main_chunks[1]);
     } else {
-        let rows: Vec<Row> = app.current_files.iter().enumerate().map(|(i, f)| {
+        let rows: Vec<Row> = app.current_files.iter().enumerate().map(|(i, (name, meta, encrypted))| {
+            let size = format!("{} KB", meta.len() / 1024);
+            let created = meta.created()
+                .map(|t| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs())
+                .map(|s| ChronoDateTime::<Utc>::from_timestamp(s as i64, 0).unwrap().to_string())
+                .unwrap_or("N/A".to_string());
+            let status = if *encrypted { "[E]" } else { "" };
             let style = if Some(i) == app.selected_file.selected() && app.mode == Mode::NavigateFiles {
                 Style::default().fg(Color::LightYellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(fg)
             };
-            Row::new(vec![Cell::from(f.as_str())]).style(style)
+            Row::new(vec![
+                Cell::from(name.as_str()),
+                Cell::from(size),
+                Cell::from(created),
+                Cell::from(status),
+            ]).style(style)
         }).collect();
-        let files_table = Table::new(rows, &[Constraint::Percentage(100)])
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title("Files")
-                .title_style(Style::default().fg(accent))
-                .border_style(Style::default().fg(if app.mode == Mode::NavigateFiles { accent } else { border })));
+        let files_table = Table::new(rows, &[
+            Constraint::Percentage(40), // نام فایل
+            Constraint::Percentage(20), // حجم
+            Constraint::Percentage(30), // تاریخ
+            Constraint::Percentage(10), // وضعیت
+        ])
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Files")
+            .title_style(Style::default().fg(accent))
+            .border_style(Style::default().fg(if app.mode == Mode::NavigateFiles { accent } else { border })));
         f.render_widget(files_table, main_chunks[1]);
     }
 
-    let status_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(2)])
-        .split(chunks[2]);
-
+    // رندر Status
     let input_style = if app.status.starts_with("[OK]") {
         let elapsed = app.success_timer.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
         if elapsed < 1.0 && app.animation_step % 2 == 0 { Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD) }
@@ -514,29 +579,21 @@ fn ui(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border))
-            .title("Status/Input\nq: Quit | k: Key | n: New | e: Encrypt | d: Decrypt\np: Preview | t: Settings | r: Remove | i: Info\nl: Load | v: Save | Right/Left: Switch")
+            .title("Status")
             .title_style(Style::default().fg(accent)));
-    f.render_widget(input_widget, status_chunks[0]);
+    f.render_widget(input_widget, chunks[2]);
 
-    let progress_widget = if app.in_progress {
-        Gauge::default()
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(border))
-                .title("Progress")
-                .title_style(Style::default().fg(accent)))
-            .gauge_style(Style::default().fg(Color::LightBlue))
-            .percent((app.progress * 100.0) as u16)
-    } else {
-        Gauge::default()
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(border)))
-            .percent(0)
-    };
-    f.render_widget(progress_widget, status_chunks[1]);
+    // رندر Help
+    let help_text = "q: Quit | k: Insert Key | n: New Folder e: Encrypt Folder | d: Decrypt Folder\n p: Preview File | t: Settings r: Remove Folder | i: Info\n l: Load | v: Save Right/Left: Switch";
+    let help_widget = Paragraph::new(help_text)
+        .style(Style::default().fg(fg))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Help")
+            .title_style(Style::default().fg(accent))
+            .border_style(Style::default().fg(border)));
+    f.render_widget(help_widget, chunks[3]);
 
     if app.mode == Mode::Settings {
         let settings_area = Rect {
